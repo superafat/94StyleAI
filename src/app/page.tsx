@@ -2,112 +2,180 @@
 import { useState } from "react";
 import Image from "next/image";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+
 type Step = "landing" | "upload" | "preferences" | "recommendations" | "result";
 
 interface Hairstyle {
-  id: number;
+  id: string;
   name: string;
   description: string;
   reason: string;
   image: string;
-  color: string;
+  color?: string;
 }
 
-const mockHairstyles: Hairstyle[] = [
-  {
-    id: 1,
-    name: "法式波浪卷",
-    description: "優雅的法式波浪髮型，適合圓臉及鵝蛋臉",
-    reason: "可修飾臉部線條，增加柔和感",
-    image: "https://images.unsplash.com/photo-1562322140-8baeececf3df?w=400&h=500&fit=crop",
-    color: "#8B4513",
-  },
-  {
-    id: 2,
-    name: "韓系短髮",
-    description: "利落的韓系短髮，適合方臉及菱形臉",
-    reason: "突出五官立體感，展現時尚氣質",
-    image: "https://images.unsplash.com/photo-1595624794900-abd1d09c7083?w=400&h=500&fit=crop",
-    color: "#2C1810",
-  },
-  {
-    id: 3,
-    name: "空氣劉海長髮",
-    description: "清新的空氣劉海搭配長髮，適合任何臉型",
-    reason: "減齡神器，突顯青春活力",
-    image: "https://images.unsplash.com/photo-1522139137660-38fb1c5a3d3a?w=400&h=500&fit=crop",
-    color: "#1a1a1a",
-  },
-  {
-    id: 4,
-    name: "丸子頭",
-    description: "俏皮丸子頭，適合圓臉及長臉",
-    reason: "拉長臉部比例，可愛又清爽",
-    image: "https://images.unsplash.com/photo-1616683693504-3ea7e9ad6fec?w=400&h=500&fit=crop",
-    color: "#4A3728",
-  },
-  {
-    id: 5,
-    name: "自然中分",
-    description: "自然中分長髮，展現成熟魅力",
-    reason: "適合職場女性，氣質典雅",
-    image: "https://images.unsplash.com/photo-1492106087820-71f1a00d2b11?w=400&h=500&fit=crop",
-    color: "#3D2314",
-  },
-  {
-    id: 6,
-    name: "時尚挑染",
-    description: "大膽的時尚挑染，適合追求個性的用戶",
-    reason: "走在潮流尖端，彰顯獨特風格",
-    image: "https://images.unsplash.com/photo-1605497788044-5a32c7078486?w=400&h=500&fit=crop",
-    color: "#C41E3A",
-  },
-];
+interface Preferences {
+  gender: string;
+  style: string;
+  occasion: string;
+  color: string;
+  length: string;
+}
 
 export default function Home() {
   const [step, setStep] = useState<Step>("landing");
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
-  const [preferences, setPreferences] = useState({
+  const [preferences, setPreferences] = useState<Preferences>({
     gender: "",
     style: "",
     occasion: "",
     color: "",
     length: "",
   });
+  const [recommendations, setRecommendations] = useState<Hairstyle[]>([]);
   const [selectedHairstyle, setSelectedHairstyle] = useState<Hairstyle | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(false);
 
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const url = URL.createObjectURL(file);
-      setUploadedImage(url);
+      // 上傳圖片到伺服器
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        const uploadRes = await fetch(`${API_BASE}/api/upload`, {
+          method: "POST",
+          body: formData,
+        });
+        const uploadData = await uploadRes.json();
+        setUploadedImage(uploadData.url || URL.createObjectURL(file));
+      } catch {
+        // Fallback to local URL
+        setUploadedImage(URL.createObjectURL(file));
+      }
       setStep("preferences");
     }
   };
 
-  const handlePreferenceChange = (key: string, value: string) => {
+  const handlePreferenceChange = (key: keyof Preferences, value: string) => {
     setPreferences((prev) => ({ ...prev, [key]: value }));
   };
 
-  const handleGetRecommendations = () => {
+  const handleGetRecommendations = async () => {
+    if (!uploadedImage) return;
+
+    setIsLoadingRecommendations(true);
     setStep("recommendations");
+
+    try {
+      const res = await fetch(`${API_BASE}/api/recommendations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image_url: uploadedImage,
+          preferences: preferences,
+        }),
+      });
+      const data = await res.json();
+      setRecommendations(data.recommendations || []);
+    } catch (error) {
+      console.error("API Error:", error);
+      // Fallback to mock data
+      setRecommendations([
+        {
+          id: "1",
+          name: "法式波浪卷",
+          description: "優雅的法式波浪髮型",
+          reason: "修飾臉部線條",
+          image: "https://images.unsplash.com/photo-1562322140-8baeececf3df?w=400&h=500&fit=crop",
+        },
+        {
+          id: "2",
+          name: "韓系短髮",
+          description: "利落的韓系短髮",
+          reason: "突出五官立體感",
+          image: "https://images.unsplash.com/photo-1595624794900-abd1d09c7083?w=400&h=500&fit=crop",
+        },
+        {
+          id: "3",
+          name: "空氣劉海長髮",
+          description: "清新空氣劉海",
+          reason: "減齡神器",
+          image: "https://images.unsplash.com/photo-1522139137660-38fb1c5a3d3a?w=400&h=500&fit=crop",
+        },
+        {
+          id: "4",
+          name: "丸子頭",
+          description: "俏皮丸子頭",
+          reason: "拉長臉部比例",
+          image: "https://images.unsplash.com/photo-1616683693504-3ea7e9ad6fec?w=400&h=500&fit=crop",
+        },
+        {
+          id: "5",
+          name: "自然中分",
+          description: "自然中分長髮",
+          reason: "氣質典雅",
+          image: "https://images.unsplash.com/photo-1492106087820-71f1a00d2b11?w=400&h=500&fit=crop",
+        },
+        {
+          id: "6",
+          name: "時尚挑染",
+          description: "時尚挑染",
+          reason: "彰顯獨特風格",
+          image: "https://images.unsplash.com/photo-1605497788044-5a32c7078486?w=400&h=500&fit=crop",
+        },
+      ]);
+    } finally {
+      setIsLoadingRecommendations(false);
+    }
   };
 
-  const handleSelectHairstyle = (hairstyle: Hairstyle) => {
+  const handleSelectHairstyle = async (hairstyle: Hairstyle) => {
+    if (!uploadedImage) return;
+
     setSelectedHairstyle(hairstyle);
     setIsGenerating(true);
-    // Simulate generation
-    setTimeout(() => {
+
+    try {
+      const res = await fetch(`${API_BASE}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          original_image_url: uploadedImage,
+          hairstyle_id: hairstyle.id,
+        }),
+      });
+      const data = await res.json();
+      
+      // 等待生成完成
+      if (data.task_id) {
+        // Poll for status
+        for (let i = 0; i < 30; i++) {
+          await new Promise(r => setTimeout(r, 1000));
+          const statusRes = await fetch(`${API_BASE}/api/tasks/${data.task_id}`);
+          const status = await statusRes.json();
+          if (status.status === "completed") {
+            setSelectedHairstyle(prev => prev ? { ...prev, image: status.result_image_url } : null);
+            break;
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Generation Error:", error);
+    } finally {
       setIsGenerating(false);
       setStep("result");
-    }, 2000);
+    }
   };
 
   const handleRestart = () => {
     setStep("landing");
     setUploadedImage(null);
     setSelectedHairstyle(null);
+    setRecommendations([]);
     setPreferences({ gender: "", style: "", occasion: "", color: "", length: "" });
   };
 
@@ -166,25 +234,6 @@ export default function Home() {
             </label>
             
             <p className="mt-4 text-sm text-gray-400">完全免費 · 無需登入 · 隱私保障</p>
-          </div>
-        )}
-
-        {/* Upload Step */}
-        {step === "upload" && (
-          <div className="max-w-xl mx-auto py-12">
-            <h2 className="text-2xl font-bold text-center mb-8">上傳您的照片</h2>
-            <div className="border-2 border-dashed border-rose-300 rounded-2xl p-12 text-center bg-white/50">
-              <div className="text-6xl mb-4">📷</div>
-              <p className="text-gray-600 mb-4">點擊或拖曳上傳照片</p>
-              <p className="text-sm text-gray-400 mb-6">支援 JPG、PNG、HEIC 格式</p>
-              <label className="inline-block bg-rose-500 text-white px-6 py-3 rounded-full cursor-pointer hover:bg-rose-600 transition">
-                選擇照片
-                <input type="file" accept="image/*" onChange={handleUpload} className="hidden" />
-              </label>
-            </div>
-            <button onClick={() => setStep("landing")} className="mt-4 text-gray-500 hover:text-gray-700">
-              ← 返回
-            </button>
           </div>
         )}
 
@@ -309,45 +358,58 @@ export default function Home() {
         {step === "recommendations" && (
           <div className="py-8">
             <div className="text-center mb-8">
-              <div className="inline-flex items-center gap-2 bg-rose-100 text-rose-700 px-4 py-2 rounded-full text-sm mb-4">
-                <span className="w-2 h-2 bg-rose-500 rounded-full animate-pulse"></span>
-                AI 分析中...
-              </div>
-              <h2 className="text-2xl font-bold">為您推薦 6 款髮型</h2>
+              {isLoadingRecommendations ? (
+                <div className="inline-flex items-center gap-2 bg-rose-100 text-rose-700 px-4 py-2 rounded-full text-sm mb-4">
+                  <span className="w-2 h-2 bg-rose-500 rounded-full animate-pulse"></span>
+                  AI 分析中...
+                </div>
+              ) : (
+                <div className="inline-flex items-center gap-2 bg-green-100 text-green-700 px-4 py-2 rounded-full text-sm mb-4">
+                  <span>✅</span> 推薦完成
+                </div>
+              )}
+              <h2 className="text-2xl font-bold">為您推薦 {recommendations.length} 款髮型</h2>
               <p className="text-gray-500">根據您的臉型與偏好個人化推薦</p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {mockHairstyles.map((hairstyle) => (
-                <div
-                  key={hairstyle.id}
-                  className="bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-xl transition cursor-pointer group"
-                  onClick={() => handleSelectHairstyle(hairstyle)}
-                >
-                  <div className="relative h-48 bg-gray-100">
-                    <Image
-                      src={hairstyle.image}
-                      alt={hairstyle.name}
-                      fill
-                      className="object-cover group-hover:scale-105 transition"
-                    />
-                    <div className="absolute top-3 right-3 bg-white/90 backdrop-blur px-3 py-1 rounded-full text-xs font-medium">
-                      適合您
+            {isLoadingRecommendations ? (
+              <div className="text-center py-20">
+                <div className="w-16 h-16 mx-auto border-4 border-rose-200 border-t-rose-500 rounded-full animate-spin mb-4"></div>
+                <p className="text-gray-500">AI 正在分析您的照片...</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {recommendations.map((hairstyle) => (
+                  <div
+                    key={hairstyle.id}
+                    className="bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-xl transition cursor-pointer group"
+                    onClick={() => handleSelectHairstyle(hairstyle)}
+                  >
+                    <div className="relative h-48 bg-gray-100">
+                      <Image
+                        src={hairstyle.image}
+                        alt={hairstyle.name}
+                        fill
+                        className="object-cover group-hover:scale-105 transition"
+                      />
+                      <div className="absolute top-3 right-3 bg-white/90 backdrop-blur px-3 py-1 rounded-full text-xs font-medium">
+                        適合您
+                      </div>
+                    </div>
+                    <div className="p-5">
+                      <h3 className="font-bold text-lg mb-2">{hairstyle.name}</h3>
+                      <p className="text-gray-600 text-sm mb-3">{hairstyle.description}</p>
+                      <div className="bg-rose-50 rounded-lg p-3">
+                        <p className="text-xs text-rose-700">
+                          <span className="font-medium">💡 推薦原因：</span>
+                          {hairstyle.reason}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                  <div className="p-5">
-                    <h3 className="font-bold text-lg mb-2">{hairstyle.name}</h3>
-                    <p className="text-gray-600 text-sm mb-3">{hairstyle.description}</p>
-                    <div className="bg-rose-50 rounded-lg p-3">
-                      <p className="text-xs text-rose-700">
-                        <span className="font-medium">💡 推薦原因：</span>
-                        {hairstyle.reason}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
 
             <div className="text-center mt-8">
               <button
@@ -431,7 +493,7 @@ export default function Home() {
             <div className="bg-white rounded-2xl p-8 text-center">
               <div className="w-16 h-16 mx-auto mb-4 border-4 border-rose-200 border-t-rose-500 rounded-full animate-spin"></div>
               <p className="text-lg font-medium">AI 生成中...</p>
-              <p className="text-sm text-gray-500">預估剩餘 2 秒</p>
+              <p className="text-sm text-gray-500">請稍候，正在為您生成新髮型</p>
             </div>
           </div>
         )}
