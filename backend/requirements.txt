@@ -4,7 +4,7 @@ firebase-admin==6.5.0
 google-cloud-vision==3.8.0
 google-cloud-storage==6.13.0
 google-cloud-tasks==2.19.0
-anthropic==0.34.0
+google-genai==1.6.0
 replicate==0.34.0
 python-multipart==0.0.12
 pydantic==2.10.0
