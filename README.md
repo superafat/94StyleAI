@@ -26,8 +26,8 @@
 - **AI Services**:
   - Google Cloud Vision API (臉部偵測)
   - MediaPipe FaceMesh (臉型分類)
-  - Claude API (髮型推薦)
-  - Replicate/Fal.ai (InstantID + SDXL)
+  - **Google Gemini API** (髮型推薦)
+  - Replicate (InstantID + SDXL 圖片生成)
 - **Queue**: Google Cloud Tasks
 - **Deployment**: Google Cloud Run
 
