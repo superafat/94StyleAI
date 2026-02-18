@@ -2,6 +2,8 @@
 94StyleAI Backend - FastAPI
 """
 import os
+import json
+import httpx
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -33,6 +35,79 @@ except Exception as e:
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
+
+# MiniMax 初始化
+MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY")
+MINIMAX_GROUP_ID = os.getenv("MINIMAX_GROUP_ID", "")
+
+# ==================== Helper Functions ====================
+
+async def call_minimax_text(prompt: str) -> str:
+    """呼叫 MiniMax M2.5 文字生成"""
+    if not MINIMAX_API_KEY:
+        return None
+    
+    url = "https://api.minimax.chat/v1/text/chatcompletion_v2"
+    headers = {
+        "Authorization": f"Bearer {MINIMAX_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "MiniMax-M2.5",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7
+    }
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, headers=headers, json=payload, timeout=30.0)
+            result = response.json()
+            return result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            print(f"MiniMax text error: {e}")
+            return None
+
+async def call_minimax_image(prompt: str, reference_image_url: str = None) -> list:
+    """呼叫 MiniMax image-01 圖片生成"""
+    if not MINIMAX_API_KEY:
+        return []
+    
+    url = "https://api.minimax.io/v1/image_generation"
+    headers = {
+        "Authorization": f"Bearer {MINIMAX_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": "image-01",
+        "prompt": prompt,
+        "aspect_ratio": "3:4",
+        "n": 1
+    }
+    
+    # 加入參考圖片（用於人物特徵參考）
+    if reference_image_url:
+        payload["subject_reference"] = [
+            {
+                "type": "character",
+                "image_file": reference_image_url
+            }
+        ]
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, headers=headers, json=payload, timeout=60.0)
+            result = response.json()
+            
+            images = []
+            if "data" in result:
+                for item in result["data"]:
+                    if "url" in item:
+                        images.append(item["url"])
+            return images
+        except Exception as e:
+            print(f"MiniMax image error: {e}")
+            return []
 
 # ==================== Models ====================
 
@@ -112,8 +187,30 @@ async def health():
 async def get_recommendations(request: RecommendationRequest):
     """取得 AI 髮型推薦"""
     
-    if GEMINI_API_KEY:
-        # 使用 Gemini API
+    # 優先使用 MiniMax，其次 Gemini，最後 Mock
+    ai_recommendation = None
+    
+    # 嘗試 MiniMax
+    if MINIMAX_API_KEY:
+        try:
+            prompt = f"""
+根據用戶的偏好，推薦適合的髮型。
+偏好：
+- 性別: {request.preferences.gender}
+- 風格: {request.preferences.style}
+- 場合: {request.preferences.occasion}
+- 髮色: {request.preferences.color}
+- 長度: {request.preferences.length}
+
+請推薦 6 款髮型，格式如下：
+1. [髮型名稱]: [適合臉型] - [推薦原因]
+"""
+            ai_recommendation = await call_minimax_text(prompt)
+        except Exception as e:
+            print(f"MiniMax recommendation error: {e}")
+    
+    # 備用 Gemini
+    if not ai_recommendation and GEMINI_API_KEY:
         try:
             model = genai.GenerativeModel('gemini-2.0-flash')
             prompt = f"""
@@ -129,28 +226,52 @@ async def get_recommendations(request: RecommendationRequest):
 1. [髮型名稱]: [適合臉型] - [推薦原因]
 """
             response = model.generate_content(prompt)
-            # TODO: 解析 response 並回傳
+            ai_recommendation = response.text
         except Exception as e:
             print(f"Gemini error: {e}")
     
-    # 回傳 Mock 資料
+    # 回傳結果
+    source = "MiniMax M2.5" if MINIMAX_API_KEY else ("Gemini" if GEMINI_API_KEY else "Mock")
+    
     return {
         "recommendations": MOCK_HAIRSTYLES,
-        "message": "AI 推薦完成" if GEMINI_API_KEY else "Mock 推薦（請設定 GEMINI_API_KEY）"
+        "ai_analysis": ai_recommendation,
+        "message": f"AI 推薦完成（{source}）"
     }
 
 @app.post("/api/generate")
 async def generate_image(request: GenerationRequest):
-    """生成換髮型圖片"""
+    """生成換髮型圖片（使用 MiniMax image-01）"""
     
-    # TODO: 串接 Replicate InstantID
-    # 目前回傳 Mock 結果
+    # 取得髮型名稱
+    hairstyle_name = "時尚髮型"
+    for style in MOCK_HAIRSTYLES:
+        if style["id"] == request.hairstyle_id:
+            hairstyle_name = style["name"]
+            break
     
+    # 使用 MiniMax image-01 生成圖片
+    if MINIMAX_API_KEY:
+        try:
+            prompt = f"人物肖像，{hairstyle_name}髮型，精致五官，自然光線，專業攝影"
+            images = await call_minimax_image(prompt, request.original_image_url)
+            
+            if images:
+                return {
+                    "task_id": f"mmx-{hash(request.hairstyle_id) % 10000}",
+                    "status": "completed",
+                    "result_image_url": images[0],
+                    "message": "圖片生成完成（MiniMax image-01）"
+                }
+        except Exception as e:
+            print(f"MiniMax image generation error: {e}")
+    
+    # 回傳 Mock 結果
     return {
         "task_id": "mock-task-123",
         "status": "completed",
-        "result_image_url": request.original_image_url,  # TODO: 替换为真实生成圖片
-        "message": "Mock 結果（請設定 REPLICATE_API_KEY）"
+        "result_image_url": request.original_image_url,
+        "message": "Mock 結果（請設定 MINIMAX_API_KEY）"
     }
 
 @app.get("/api/tasks/{task_id}")

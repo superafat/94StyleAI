@@ -2,10 +2,23 @@
 
 ## 環境變數
 ```
+# Firebase
 FIREBASE_PROJECT_ID=94style-ai
-GEMINI_API_KEY=your-gemini-api-key
-REPLICATE_API_KEY=your-replicate-api-key
+FIREBASE_SERVICE_ACCOUNT=path-to-service-account.json
+
+# AI API（優先順序：MiniMax > Gemini）
+MINIMAX_API_KEY=your-minimax-api-key   # 文字推薦 + 圖片生成
+GEMINI_API_KEY=your-gemini-api-key     # 備用文字推薦
+
+# Port
+PORT=8080
 ```
+
+## AI 模型對照
+| 功能 | 主要方案 | 備用方案 | 價格 |
+|------|---------|---------|------|
+| 髮型推薦 | MiniMax M2.5 | Gemini | ~$0.3/1M tokens |
+| 圖片生成 | MiniMax image-01 | - | 0.025 元/張 |
 
 ## API Endpoints
 
