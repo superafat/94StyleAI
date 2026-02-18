@@ -1,0 +1,46 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+
+permissions:
+  contents: 'read'
+  id-token: 'write'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: cch-beautifier-api
+          region: asia-east1
+          image: gcr.io/${{ secrets.GCP_PROJECT_ID }}/94style-ai:${{ github.sha }}
+          flags: '--allow-unauthenticated'
+
+      - name: Build and push Docker image
+        run: |
+          gcloud builds submit ./backend \
+            --tag gcr.io/${{ secrets.GCP_PROJECT_ID }}/94style-ai:${{ github.sha }} \
+            --project ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy cch-beautifier-api \
+            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/94style-ai:${{ github.sha }} \
+            --region asia-east1 \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --update-env-vars MINIMAX_API_KEY=${{ secrets.MINIMAX_API_KEY }},GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
