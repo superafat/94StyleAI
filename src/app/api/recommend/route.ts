@@ -1,70 +1,53 @@
-import { GoogleGenAI } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// 使用後端 API
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "https://cch-beautifier-api-1047288460556.asia-east1.run.app";
 
 export async function POST(request: NextRequest) {
   try {
-    const { imageUrl, preferences } = await request.json();
+    const { image_base64, imageUrl, image_url, preferences } = await request.json();
 
-    if (!imageUrl) {
+    // 支援 base64 或 URL（Firebase Storage URL）
+    let imagePayload: string | null = null;
+    if (image_base64) {
+      imagePayload = `data:image/jpeg;base64,${image_base64}`;
+    } else if (image_url) {
+      imagePayload = image_url;
+    } else if (imageUrl) {
+      imagePayload = imageUrl; // Firebase Storage URL
+    }
+
+    if (!imagePayload) {
       return NextResponse.json(
-        { error: "Image URL is required" },
+        { error: "Image is required" },
         { status: 400 }
       );
     }
 
-    const prompt = `
-You are a professional hairstyle consultant. Analyze the user's face from the provided photo and recommend 6 suitable hairstyles.
-
-User's preferences: ${preferences || "No specific preferences"}
-
-Please provide your response in the following JSON format:
-{
-  "recommendations": [
-    {
-      "name": "Hairstyle name",
-      "description": "Brief description of the hairstyle",
-      "reason": "Why this hairstyle suits the user",
-      "faceShapeMatch": "Which face shape it matches best"
-    }
-  ]
-}
-
-Analyze the photo and provide 6 personalized hairstyle recommendations.
-`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: [
-        { text: prompt },
-        { inlineData: { mimeType: "image/jpeg", data: imageUrl } }
-      ],
-      config: {
-        responseMimeType: "application/json",
-        temperature: 0.7,
-        maxOutputTokens: 2048,
-      },
+    // 調用後端 API
+    const response = await fetch(`${BACKEND_URL}/api/recommendations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image_url: imagePayload,
+        preferences: preferences || {
+          gender: "female",
+          style: "casual",
+          occasion: "daily",
+          color: "black",
+          length: "long",
+        },
+      }),
     });
 
-    const text = response.text ?? "";
-    let recommendations;
-
-    try {
-      recommendations = JSON.parse(text);
-    } catch {
-      // If parsing fails, try to extract JSON from the text
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        recommendations = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error("Failed to parse Gemini response");
-      }
+    const data = await response.json();
+    if (!response.ok) {
+      return NextResponse.json(data, { status: response.status });
     }
 
-    return NextResponse.json({ success: true, recommendations });
+    return NextResponse.json(data);
   } catch (error) {
-    console.error("Gemini API error:", error);
+    console.error("Recommend API error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to get recommendations" },
       { status: 500 }

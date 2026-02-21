@@ -5,6 +5,21 @@
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
+interface Preferences {
+  gender: string;
+  style: string;
+  occasion: string;
+  color: string;
+  length: string;
+}
+
+const isRemoteUrl = (value: string) => /^https?:\/\//i.test(value);
+const toImagePayload = (value: string) => {
+  if (value.startsWith("data:")) return value;
+  if (isRemoteUrl(value)) return value;
+  return `data:image/jpeg;base64,${value}`;
+};
+
 /**
  * 获取发型推荐
  * @param imageUrl - 用户照片的 URL
@@ -12,15 +27,15 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
  */
 export async function getHairstyleRecommendations(
   imageUrl: string,
-  preferences?: string
+  preferences?: Preferences
 ) {
-  const response = await fetch(`${API_BASE_URL}/api/recommend`, {
+  const response = await fetch(`${API_BASE_URL}/api/recommendations`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      imageUrl,
+      image_url: toImagePayload(imageUrl),
       preferences,
     }),
   });
@@ -41,8 +56,7 @@ export async function getHairstyleRecommendations(
  */
 export async function generateHairstyleImage(
   faceImage: string,
-  referenceHairstyle: string,
-  hairstyleName: string
+  hairstyleId: string
 ) {
   const response = await fetch(`${API_BASE_URL}/api/generate`, {
     method: "POST",
@@ -50,9 +64,8 @@ export async function generateHairstyleImage(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      faceImage,
-      referenceHairstyle,
-      hairstyleName,
+      original_image_url: toImagePayload(faceImage),
+      hairstyle_id: hairstyleId,
     }),
   });
 
@@ -70,7 +83,7 @@ export async function generateHairstyleImage(
  */
 export async function checkGenerationStatus(predictionId: string) {
   const response = await fetch(
-    `${API_BASE_URL}/api/generate?predictionId=${predictionId}`
+    `${API_BASE_URL}/api/tasks/${predictionId}`
   );
 
   if (!response.ok) {

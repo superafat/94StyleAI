@@ -6,19 +6,28 @@ import json
 import httpx
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, Field, AliasChoices
+from typing import Optional, List, Dict, Any
 import firebase_admin
-from firebase_admin import credentials, auth, firestore
+from firebase_admin import credentials, auth, firestore, storage
 import google.generativeai as genai
+import uuid
+import datetime
 
 app = FastAPI(title="94StyleAI API")
 
+# 簡易任務儲存（單機記憶體）
+TASK_RESULTS: Dict[str, Dict[str, Any]] = {}
+
 # CORS
+cors_origins_raw = os.getenv("CORS_ORIGINS", "*")
+cors_origins = [origin.strip() for origin in cors_origins_raw.split(",") if origin.strip()] or ["*"]
+allow_credentials = cors_origins != ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -28,8 +37,12 @@ try:
     cred = credentials.Certificate(os.getenv("FIREBASE_SERVICE_ACCOUNT"))
     firebase_admin.initialize_app(cred)
     db = firestore.client()
+    # 初始化 Storage
+    bucket_name = os.getenv("FIREBASE_STORAGE_BUCKET", "style-94.firebasestorage.app")
+    storage_bucket = firebase_admin.storage.bucket(bucket_name)
 except Exception as e:
     print(f"Firebase init warning: {e}")
+    storage_bucket = None
 
 # Gemini 初始化
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -61,6 +74,7 @@ async def call_minimax_text(prompt: str) -> str:
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(url, headers=headers, json=payload, timeout=30.0)
+            response.raise_for_status()
             result = response.json()
             return result.get("choices", [{}])[0].get("message", {}).get("content", "")
         except Exception as e:
@@ -97,6 +111,7 @@ async def call_minimax_image(prompt: str, reference_image_url: str = None) -> li
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(url, headers=headers, json=payload, timeout=60.0)
+            response.raise_for_status()
             result = response.json()
             
             images = []
@@ -119,12 +134,12 @@ class Preferences(BaseModel):
     length: str
 
 class RecommendationRequest(BaseModel):
-    image_url: str
+    image_url: str = Field(validation_alias=AliasChoices("image_url", "image", "imageUrl", "image_base64"))
     preferences: Preferences
 
 class GenerationRequest(BaseModel):
-    original_image_url: str
-    hairstyle_id: str
+    original_image_url: str = Field(validation_alias=AliasChoices("original_image_url", "faceImage"))
+    hairstyle_id: str = Field(validation_alias=AliasChoices("hairstyle_id", "hairstyleId"))
 
 # ==================== Mock Data ====================
 
@@ -189,6 +204,7 @@ async def get_recommendations(request: RecommendationRequest):
     
     # 優先使用 MiniMax，其次 Gemini，最後 Mock
     ai_recommendation = None
+    source = "Mock"
     
     # 嘗試 MiniMax
     if MINIMAX_API_KEY:
@@ -206,6 +222,8 @@ async def get_recommendations(request: RecommendationRequest):
 1. [髮型名稱]: [適合臉型] - [推薦原因]
 """
             ai_recommendation = await call_minimax_text(prompt)
+            if ai_recommendation:
+                source = "MiniMax M2.5"
         except Exception as e:
             print(f"MiniMax recommendation error: {e}")
     
@@ -227,12 +245,12 @@ async def get_recommendations(request: RecommendationRequest):
 """
             response = model.generate_content(prompt)
             ai_recommendation = response.text
+            if ai_recommendation:
+                source = "Gemini"
         except Exception as e:
             print(f"Gemini error: {e}")
     
     # 回傳結果
-    source = "MiniMax M2.5" if MINIMAX_API_KEY else ("Gemini" if GEMINI_API_KEY else "Mock")
-    
     return {
         "recommendations": MOCK_HAIRSTYLES,
         "ai_analysis": ai_recommendation,
@@ -257,8 +275,15 @@ async def generate_image(request: GenerationRequest):
             images = await call_minimax_image(prompt, request.original_image_url)
             
             if images:
+                task_id = f"mmx-{uuid.uuid4().hex[:10]}"
+                TASK_RESULTS[task_id] = {
+                    "task_id": task_id,
+                    "status": "completed",
+                    "progress": 100,
+                    "result_image_url": images[0],
+                }
                 return {
-                    "task_id": f"mmx-{hash(request.hairstyle_id) % 10000}",
+                    "task_id": task_id,
                     "status": "completed",
                     "result_image_url": images[0],
                     "message": "圖片生成完成（MiniMax image-01）"
@@ -267,8 +292,16 @@ async def generate_image(request: GenerationRequest):
             print(f"MiniMax image generation error: {e}")
     
     # 回傳 Mock 結果
+    task_id = f"mock-{uuid.uuid4().hex[:10]}"
+    TASK_RESULTS[task_id] = {
+        "task_id": task_id,
+        "status": "completed",
+        "progress": 100,
+        "result_image_url": request.original_image_url,
+    }
+
     return {
-        "task_id": "mock-task-123",
+        "task_id": task_id,
         "status": "completed",
         "result_image_url": request.original_image_url,
         "message": "Mock 結果（請設定 MINIMAX_API_KEY）"
@@ -277,20 +310,53 @@ async def generate_image(request: GenerationRequest):
 @app.get("/api/tasks/{task_id}")
 async def get_task_status(task_id: str):
     """查詢任務狀態"""
+    task = TASK_RESULTS.get(task_id)
+    if task:
+        return task
+
     return {
         "task_id": task_id,
-        "status": "completed",
-        "progress": 100
+        "status": "not_found",
+        "progress": 0,
+        "message": "任務不存在"
     }
 
 @app.post("/api/upload")
 async def upload_image(file: UploadFile = File(...)):
     """上傳圖片到 Firebase Storage"""
-    # TODO: 實現 Firebase Storage 上傳
-    return {
-        "url": f"https://storage.googleapis.com/94style-ai.appspot.com/uploads/{file.filename}",
-        "message": "Mock 上傳（請設定 Firebase）"
-    }
+    if not storage_bucket:
+        # 如果沒有 Firebase，回傳 Mock
+        return {
+            "url": f"https://storage.googleapis.com/mock-bucket/uploads/{file.filename}",
+            "message": "Mock 上傳（請設定 FIREBASE_SERVICE_ACCOUNT）"
+        }
+    
+    try:
+        # 產生唯一檔名
+        file_ext = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
+        unique_filename = f"{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.{file_ext}"
+        blob_path = f"uploads/{unique_filename}"
+        
+        # 讀取檔案內容
+        content = await file.read()
+        
+        # 上传到 Firebase Storage
+        blob = storage_bucket.blob(blob_path)
+        blob.upload_from_string(content, content_type=file.content_type)
+        
+        # 設為公開
+        blob.make_public()
+        
+        return {
+            "url": blob.public_url,
+            "message": "上傳成功"
+        }
+    except Exception as e:
+        print(f"Upload error: {e}")
+        return {
+            "url": f"https://storage.googleapis.com/mock-bucket/uploads/{file.filename}",
+            "message": f"上傳失敗，使用 Mock: {str(e)}"
+        }
 
 if __name__ == "__main__":
     import uvicorn
